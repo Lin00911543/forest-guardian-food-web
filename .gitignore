@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+site-publish/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db

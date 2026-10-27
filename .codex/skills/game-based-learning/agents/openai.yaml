@@ -1,0 +1,4 @@
+interface:
+  display_name: "遊戲式學習設計"
+  short_description: "根據學習目標設計遊戲玩法、互動回饋、課堂活動、原型與學習成效評量"
+  default_prompt: "Use $game-based-learning 依照我的學習目標，規劃遊戲玩法並檢查學習證據。"
