@@ -19,6 +19,14 @@ import {
   type RoundRecord,
   type RunRecord,
 } from '../systems/ecosystem-simulation';
+import {
+  createAnonymousId,
+  submitReflectionSubmitted,
+  submitRunCompleted,
+  type LearningEvidenceStatus,
+  type LearningOptionId,
+  type LearningReason,
+} from '../systems/learning-evidence';
 
 const WIDTH = 1440;
 const HEIGHT = 900;
@@ -42,6 +50,15 @@ const COLORS = {
 interface LearningOption {
   text: string;
   correct: boolean;
+  reason?: LearningReason;
+}
+
+interface SavedRunState {
+  firstRun?: RunRecord | null;
+  secondRun?: RunRecord | null;
+  comparisonId?: string;
+  firstAttemptId?: string;
+  secondAttemptId?: string;
 }
 
 export class ForestScene extends Phaser.Scene {
@@ -49,9 +66,14 @@ export class ForestScene extends Phaser.Scene {
   private currentRun: RunRecord | null = null;
   private firstRun: RunRecord | null = null;
   private secondRun: RunRecord | null = null;
+  private comparisonId = createAnonymousId();
+  private firstAttemptId = '';
+  private secondAttemptId = '';
   private lastRoundSummary = '';
   private answeredComparison = false;
   private answerFeedback = '';
+  private runSubmissionStatus: Record<'A' | 'B', LearningEvidenceStatus> = { A: 'idle', B: 'idle' };
+  private reflectionSubmissionStatus: LearningEvidenceStatus = 'idle';
   private textMeasureContext: CanvasRenderingContext2D | null = null;
 
   constructor() {
@@ -91,22 +113,39 @@ export class ForestScene extends Phaser.Scene {
     try {
       const raw = window.localStorage.getItem(RUN_STORAGE_KEY);
       if (!raw) return;
-      const saved = JSON.parse(raw) as RunRecord | { firstRun?: RunRecord | null; secondRun?: RunRecord | null };
-      if ('strategy' in saved) this.firstRun = saved;
+      const saved = JSON.parse(raw) as RunRecord | SavedRunState;
+      if ('strategy' in saved) {
+        this.firstRun = saved;
+        this.comparisonId = createAnonymousId();
+        this.firstAttemptId = createAnonymousId();
+      }
       else {
         this.firstRun = saved.firstRun ?? null;
         this.secondRun = saved.secondRun ?? null;
+        this.comparisonId = saved.comparisonId || createAnonymousId();
+        this.firstAttemptId = saved.firstAttemptId || (this.firstRun ? createAnonymousId() : '');
+        this.secondAttemptId = saved.secondAttemptId || (this.secondRun ? createAnonymousId() : '');
       }
+      if (this.firstRun) this.saveRuns();
     } catch {
       this.firstRun = null;
       this.secondRun = null;
+      this.comparisonId = createAnonymousId();
+      this.firstAttemptId = '';
+      this.secondAttemptId = '';
     }
   }
 
   private saveRuns(): void {
     if (!this.firstRun) return;
     try {
-      window.localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify({ firstRun: this.firstRun, secondRun: this.secondRun }));
+      window.localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify({
+        comparisonId: this.comparisonId,
+        firstAttemptId: this.firstAttemptId,
+        secondAttemptId: this.secondAttemptId,
+        firstRun: this.firstRun,
+        secondRun: this.secondRun,
+      }));
     } catch {
       // The current page can still complete both runs when storage is unavailable.
     }
@@ -236,9 +275,9 @@ export class ForestScene extends Phaser.Scene {
       align: 'center',
       wordWrap: { width: 970 },
     }).setOrigin(0.5);
-    this.addText(720, 748, '族群以 0–10 的相對數量表示；箭頭由食物指向取食者。這是用來練習推理的簡化模型。', 20, '#4e5d4c', {
+    this.addText(720, 748, '族群以 0–10 表示；箭頭由食物指向取食者。完成比較題後會送出策略與族群紀錄，需登入 Google；不收集姓名或電子郵件。', 18, '#4e5d4c', {
       align: 'center',
-      wordWrap: { width: 1100 },
+      wordWrap: { width: 1120 },
     }).setOrigin(0.5);
 
     let label = '開始策略 A';
@@ -258,8 +297,13 @@ export class ForestScene extends Phaser.Scene {
     this.firstRun = null;
     this.secondRun = null;
     this.currentRun = null;
+    this.comparisonId = createAnonymousId();
+    this.firstAttemptId = '';
+    this.secondAttemptId = '';
     this.answeredComparison = false;
     this.answerFeedback = '';
+    this.runSubmissionStatus = { A: 'idle', B: 'idle' };
+    this.reflectionSubmissionStatus = 'idle';
     try {
       window.localStorage.removeItem(RUN_STORAGE_KEY);
     } catch {
@@ -551,14 +595,23 @@ export class ForestScene extends Phaser.Scene {
 
   private finishRun(): void {
     if (!this.currentRun) return;
-    if (this.currentRun.strategy === 'A') {
-      this.firstRun = this.currentRun;
-      this.saveRuns();
+    const run = this.currentRun;
+    const attemptId = createAnonymousId();
+    if (run.strategy === 'A') {
+      this.firstRun = run;
+      this.firstAttemptId = attemptId;
     } else {
-      this.secondRun = this.currentRun;
-      this.saveRuns();
+      this.secondRun = run;
+      this.secondAttemptId = attemptId;
     }
+    this.runSubmissionStatus[run.strategy] = 'sending';
+    this.saveRuns();
     this.renderResult();
+
+    void submitRunCompleted(run, this.comparisonId, attemptId).then((status) => {
+      this.runSubmissionStatus[run.strategy] = status;
+      if (this.currentRun === run) this.renderResult();
+    });
   }
 
   private renderResult(): void {
@@ -591,6 +644,16 @@ export class ForestScene extends Phaser.Scene {
       this.addText(x, 524, inSafe ? '在安全範圍' : '超出安全範圍', 17, inSafe ? '#3e6b38' : '#a13f32', { align: 'center', fontStyle: 'bold' }).setOrigin(0.5);
       this.drawPopulationBar(x, 555, 150, 13, run.final[species.id], species.safeMin, species.safeMax, species.color);
     });
+
+    const submissionStatus = this.runSubmissionStatus[run.strategy];
+    if (submissionStatus !== 'idle') {
+      const statusText = submissionStatus === 'sending'
+        ? '策略紀錄傳送中…'
+        : submissionStatus === 'sent'
+          ? '已送出策略紀錄請求；請以試算表確認是否入帳。'
+          : '策略紀錄未能連線送出；遊玩紀錄仍保存在此瀏覽器。';
+      this.addText(720, 650, statusText, 17, submissionStatus === 'failed' ? '#8b4c3d' : '#465747', { align: 'center' }).setOrigin(0.5);
+    }
 
     const nextAction = run.strategy === 'A'
       ? () => this.startDraft()
@@ -627,13 +690,22 @@ export class ForestScene extends Phaser.Scene {
       rect.setInteractive({ useHandCursor: true });
       rect.on('pointerover', () => rect.setFillStyle(0xf0f4e7));
       rect.on('pointerout', () => rect.setFillStyle(0xfffdf6));
-      rect.on('pointerdown', () => this.answerComparison(option.correct));
+      const selectedOptionId = String.fromCharCode(65 + index) as LearningOptionId;
+      rect.on('pointerdown', () => this.answerComparison(selectedOptionId, option));
       optionText.setInteractive({ useHandCursor: true });
-      optionText.on('pointerdown', () => this.answerComparison(option.correct));
+      optionText.on('pointerdown', () => this.answerComparison(selectedOptionId, option));
     });
 
     if (this.answerFeedback) {
-      this.addText(720, 797, this.answerFeedback, 19, this.answeredComparison ? '#32643b' : '#854731', { align: 'center' }).setOrigin(0.5);
+      const statusText = this.reflectionSubmissionStatus === 'sending'
+        ? '策略與解釋紀錄傳送中…'
+        : this.reflectionSubmissionStatus === 'sent'
+          ? '紀錄請求已送出；請以試算表確認是否入帳。'
+          : this.reflectionSubmissionStatus === 'failed'
+            ? '紀錄傳送失敗；請確認網路與 Google 登入狀態。'
+            : '';
+      const feedbackText = statusText ? `${this.answerFeedback} ${statusText}` : this.answerFeedback;
+      this.addText(720, 797, feedbackText, 17, this.reflectionSubmissionStatus === 'failed' ? '#854731' : (this.answeredComparison ? '#32643b' : '#854731'), { align: 'center', wordWrap: { width: 1290 } }).setOrigin(0.5);
       if (this.answeredComparison) {
         this.addButton(720, 844, 300, 48, '再比較一組策略', () => this.startNewComparison(), 'secondary', 18);
       }
@@ -732,9 +804,12 @@ export class ForestScene extends Phaser.Scene {
     const correct = best
       ? `第 ${best.turn} 回合，策略 ${best.strategy} 的${SPECIES_BY_ID[best.food].name}多 ${best.foodGap} 格，${SPECIES_BY_ID[best.eater].name}也多 ${best.eaterGap} 格；圖上的食物網顯示${SPECIES_BY_ID[best.eater].name}會取食${SPECIES_BY_ID[best.food].name}，可以用食物來源關係一起解讀。`
       : this.makeFallbackExplanation(first, second);
+    const correctReason = best
+      ? { turn: best.turn, strategy: best.strategy, food: best.food, eater: best.eater }
+      : undefined;
     const reversedEdge = FOOD_WEB[0];
     const options: LearningOption[] = [
-      { text: correct, correct: true },
+      { text: correct, correct: true, reason: correctReason },
       { text: '兩次事件順序不一樣，所以族群變化不同；卡牌選擇不會影響結果。', correct: false },
       { text: `箭頭代表取食者被食物吃掉，因此${SPECIES_BY_ID[reversedEdge.food].name}會吃${SPECIES_BY_ID[reversedEdge.eater].name}。`, correct: false },
     ];
@@ -769,13 +844,42 @@ export class ForestScene extends Phaser.Scene {
     return `第 ${bestTurn} 回合，策略 ${higher} 的${bestSpecies.name}較多 ${bestDiff} 格；先看這回合的事件與行動卡直接改變了誰，再用食物網中的「${relation}」關係尋找可能的連鎖影響。`;
   }
 
-  private answerComparison(correct: boolean): void {
+  private answerComparison(selectedOptionId: LearningOptionId, option: LearningOption): void {
     if (this.answeredComparison) return;
-    this.answeredComparison = correct;
-    this.answerFeedback = correct
+    this.answeredComparison = true;
+    this.answerFeedback = option.correct
       ? '答對了！你根據兩次圖表資料，並用「食物 → 取食者」的關係解讀變化。'
       : '再觀察一次：兩次事件順序相同；箭頭由食物指向取食者。';
+    this.reflectionSubmissionStatus = 'sending';
     this.renderComparison();
+
+    const comparisonId = this.comparisonId;
+    void this.submitComparisonEvidence(comparisonId, selectedOptionId, option).then((status) => {
+      if (this.comparisonId !== comparisonId) return;
+      this.reflectionSubmissionStatus = status;
+      this.renderComparison();
+    });
+  }
+
+  private async submitComparisonEvidence(
+    comparisonId: string,
+    selectedOptionId: LearningOptionId,
+    option: LearningOption,
+  ): Promise<LearningEvidenceStatus> {
+    if (!this.firstRun || !this.secondRun) return 'failed';
+    if (!this.firstAttemptId) this.firstAttemptId = createAnonymousId();
+    if (!this.secondAttemptId) this.secondAttemptId = createAnonymousId();
+    this.saveRuns();
+
+    const firstStatus = await submitRunCompleted(this.firstRun, comparisonId, this.firstAttemptId);
+    const secondStatus = await submitRunCompleted(this.secondRun, comparisonId, this.secondAttemptId);
+    const reflectionStatus = await submitReflectionSubmitted(
+      comparisonId,
+      selectedOptionId,
+      option.correct,
+      option.reason,
+    );
+    return firstStatus === 'sent' && secondStatus === 'sent' && reflectionStatus === 'sent' ? 'sent' : 'failed';
   }
 
   private describeCascade(round: RoundRecord): string {
