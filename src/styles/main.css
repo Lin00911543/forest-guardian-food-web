@@ -1,9 +1,3 @@
-@font-face {
-  font-family: 'Huninn';
-  src: url('/assets/fonts/jf-openhuninn-2.1.ttf') format('truetype');
-  font-display: swap;
-}
-
 :root {
   color-scheme: dark;
   font-family: 'Huninn', sans-serif;
