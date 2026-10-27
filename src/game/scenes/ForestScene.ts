@@ -649,7 +649,7 @@ export class ForestScene extends Phaser.Scene {
     if (submissionStatus !== 'idle') {
       const statusText = submissionStatus === 'sending'
         ? '策略紀錄傳送中…'
-        : submissionStatus === 'sent'
+        : submissionStatus === 'queued'
           ? '已送出策略紀錄請求；請以試算表確認是否入帳。'
           : '策略紀錄未能連線送出；遊玩紀錄仍保存在此瀏覽器。';
       this.addText(720, 650, statusText, 17, submissionStatus === 'failed' ? '#8b4c3d' : '#465747', { align: 'center' }).setOrigin(0.5);
@@ -699,7 +699,7 @@ export class ForestScene extends Phaser.Scene {
     if (this.answerFeedback) {
       const statusText = this.reflectionSubmissionStatus === 'sending'
         ? '策略與解釋紀錄傳送中…'
-        : this.reflectionSubmissionStatus === 'sent'
+        : this.reflectionSubmissionStatus === 'queued'
           ? '紀錄請求已送出；請以試算表確認是否入帳。'
           : this.reflectionSubmissionStatus === 'failed'
             ? '紀錄傳送失敗；請確認網路與 Google 登入狀態。'
@@ -879,7 +879,7 @@ export class ForestScene extends Phaser.Scene {
       option.correct,
       option.reason,
     );
-    return firstStatus === 'sent' && secondStatus === 'sent' && reflectionStatus === 'sent' ? 'sent' : 'failed';
+    return firstStatus === 'queued' && secondStatus === 'queued' && reflectionStatus === 'queued' ? 'queued' : 'failed';
   }
 
   private describeCascade(round: RoundRecord): string {

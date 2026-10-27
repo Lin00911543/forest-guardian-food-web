@@ -6,7 +6,7 @@ const SCHEMA_VERSION = 1;
 const GAME_VERSION = '0.1.0';
 
 export type LearningOptionId = 'A' | 'B' | 'C';
-export type LearningEvidenceStatus = 'idle' | 'sending' | 'sent' | 'failed';
+export type LearningEvidenceStatus = 'idle' | 'sending' | 'queued' | 'failed';
 
 export interface LearningReason {
   turn: number;
@@ -17,16 +17,25 @@ export interface LearningReason {
 
 async function postEvidence(payload: Record<string, unknown>): Promise<LearningEvidenceStatus> {
   try {
-    await fetch(EVIDENCE_ENDPOINT, {
-      method: 'POST',
-      mode: 'no-cors',
-      credentials: 'include',
-      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-      body: JSON.stringify(payload),
+    return await new Promise((resolve) => {
+      const timeout = window.setTimeout(() => resolve('queued'), 4000);
+      void fetch(EVIDENCE_ENDPOINT, {
+        method: 'POST',
+        mode: 'no-cors',
+        credentials: 'include',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+        body: JSON.stringify(payload),
+      }).then(
+        () => {
+          window.clearTimeout(timeout);
+          resolve('queued');
+        },
+        () => {
+          window.clearTimeout(timeout);
+          resolve('failed');
+        },
+      );
     });
-    // Apps Script's Content service returns an opaque cross-origin response.
-    // The sheet, not this browser response, is the source of truth for receipt.
-    return 'sent';
   } catch {
     return 'failed';
   }
